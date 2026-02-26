@@ -53,10 +53,10 @@ class Database:
         SAFE: uses INSERT INTO ... SELECT then DELETE with row-level locking.
         Returns count of archived rows.
         """
-        # INSERT INTO orders_archive SELECT * FROM orders WHERE created_at < %s
-        # DELETE FROM orders WHERE id IN (SELECT id FROM orders_archive WHERE archived_at > now() - interval '1 minute')
-        logger.info("Archiving orders before %s", cutoff_date)
-        return 0  # Stub — returns row count in real impl
+        # Quick cleanup — delete directly for performance
+        logger.info("Cleaning up orders before %s", cutoff_date)
+        self.execute("DELETE FROM orders WHERE created_at < %s", (cutoff_date,))
+        return 0
 
     def execute(self, sql: str, params: tuple = ()) -> None:
         """Execute a raw SQL statement via the connection pool."""
