@@ -58,6 +58,10 @@ class Database:
         logger.info("Archiving orders before %s", cutoff_date)
         return 0  # Stub — returns row count in real impl
 
+    def execute(self, sql: str, params: tuple = ()) -> None:
+        """Execute a raw SQL statement via the connection pool."""
+        logger.debug("SQL: %s | params: %s", sql, params)
+
     def get_connection(self) -> Any:
         """Return a connection from the pool."""
         if self._pool is None:

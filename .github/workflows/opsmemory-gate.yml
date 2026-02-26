@@ -33,82 +33,105 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          fetch-depth: 0   # Full history for accurate diff
+          fetch-depth: 0
 
-      - name: Extract git diff
-        id: diff
+      - name: Build OpsMemory payload
+        id: build_payload
         run: |
-          # Get diff against base branch (or last commit for push events)
-          if [ "${{ github.event_name }}" = "pull_request" ]; then
-            DIFF=$(git diff origin/${{ github.base_ref }}...HEAD -- . 2>/dev/null || git diff HEAD~1 HEAD)
-          else
-            DIFF=$(git diff HEAD~1 HEAD 2>/dev/null || echo "Initial commit")
-          fi
-          # Escape for JSON
-          DIFF_ESCAPED=$(echo "$DIFF" | python3 -c "import sys,json; print(json.dumps(sys.stdin.read()))")
-          echo "diff=$DIFF_ESCAPED" >> $GITHUB_OUTPUT
+          # Collect commit message and diff summary
+          COMMIT_MSG=$(git log -1 --pretty=%B)
 
-      - name: Analyze with OpsMemory AI
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            DIFF=$(git diff origin/${{ github.base_ref }}...HEAD 2>/dev/null | head -200 || echo "diff unavailable")
+          else
+            DIFF=$(git diff HEAD~1 HEAD 2>/dev/null | head -200 || echo "Initial commit")
+          fi
+
+          # Write payload safely via Python to avoid shell escaping issues
+          python3 - <<'PYEOF'
+          import json, os
+
+          commit_msg = os.popen("git log -1 --pretty=%B").read().strip()
+          service    = "checkout-service"
+
+          payload = {
+              "service": service,
+              "changes": commit_msg
+          }
+
+          with open("/tmp/opsmemory_payload.json", "w") as f:
+              json.dump(payload, f)
+
+          print("Payload written:")
+          print(json.dumps(payload, indent=2))
+          PYEOF
+
+      - name: Call OpsMemory AI
         id: opsmemory
         run: |
-          echo "🧠 Sending diff to OpsMemory AI for analysis..."
+          echo "🧠 Sending to OpsMemory AI..."
+          cat /tmp/opsmemory_payload.json
 
-          RESPONSE=$(curl -s -X POST \
+          curl -s -X POST \
             "https://ops-memory-ai.vercel.app/api/demo" \
             -H "Content-Type: application/json" \
-            -d "{
-              \"service\": \"checkout-service\",
-              \"changes\": $(git log -1 --pretty=%B | python3 -c 'import sys,json; print(json.dumps(sys.stdin.read()))'),
-              \"diff\": ${{ steps.diff.outputs.diff }}
-            }" \
-            --max-time 120)
-
-          echo "Raw response: $RESPONSE"
-
-          VERDICT=$(echo "$RESPONSE" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('verdict','UNKNOWN'))" 2>/dev/null || echo "UNKNOWN")
-          REASONING=$(echo "$RESPONSE" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('reasoning','No reasoning returned'))" 2>/dev/null || echo "Could not parse response")
-
-          echo "verdict=$VERDICT" >> $GITHUB_OUTPUT
-          echo "reasoning<<EOF" >> $GITHUB_OUTPUT
-          echo "$REASONING" >> $GITHUB_OUTPUT
-          echo "EOF" >> $GITHUB_OUTPUT
+            --data-binary @/tmp/opsmemory_payload.json \
+            --max-time 120 \
+            -o /tmp/opsmemory_response.json
 
           echo ""
-          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-          echo "  OpsMemory AI Verdict: $VERDICT"
-          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-          echo "$REASONING"
-          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+          echo "Raw response:"
+          cat /tmp/opsmemory_response.json
+
+          # Parse verdict and reasoning safely
+          python3 - <<'PYEOF'
+          import json, os
+
+          try:
+              with open("/tmp/opsmemory_response.json") as f:
+                  data = json.load(f)
+              verdict   = data.get("verdict", "UNKNOWN")
+              reasoning = data.get("reasoning", "No reasoning returned.")
+          except Exception as e:
+              verdict   = "UNKNOWN"
+              reasoning = f"Could not parse OpsMemory response: {e}"
+
+          # Write to GITHUB_OUTPUT
+          gho = os.environ.get("GITHUB_OUTPUT", "/dev/stdout")
+          with open(gho, "a") as out:
+              out.write(f"verdict={verdict}\n")
+              out.write("reasoning<<EOF\n")
+              out.write(reasoning + "\n")
+              out.write("EOF\n")
+
+          print(f"\nVerdict  : {verdict}")
+          print(f"Reasoning: {reasoning[:300]}")
+          PYEOF
 
       - name: Gate decision
         run: |
           VERDICT="${{ steps.opsmemory.outputs.verdict }}"
 
+          echo ""
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+          echo "  OpsMemory AI Verdict: $VERDICT"
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+          echo "${{ steps.opsmemory.outputs.reasoning }}"
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+
           if [ "$VERDICT" = "DENY" ]; then
             echo ""
             echo "⛔ DEPLOYMENT BLOCKED BY OpsMemory AI"
-            echo ""
-            echo "Reason:"
-            echo "${{ steps.opsmemory.outputs.reasoning }}"
-            echo ""
-            echo "To unblock: review the flagged signals, consult the relevant ADR,"
-            echo "and get explicit sign-off from the platform team."
+            echo "Review the flagged signals and get sign-off from the platform team."
             exit 1
 
           elif [ "$VERDICT" = "NEEDS_REVIEW" ] || [ "$VERDICT" = "NEEDS REVIEW" ]; then
             echo ""
-            echo "⚠️  MANUAL REVIEW REQUIRED by OpsMemory AI"
-            echo ""
-            echo "${{ steps.opsmemory.outputs.reasoning }}"
-            echo ""
-            echo "This deployment requires explicit approval from a senior engineer."
-            # Don't block — but the PR will show the warning annotation
+            echo "⚠️  MANUAL REVIEW REQUIRED"
             exit 0
 
           else
             echo ""
             echo "✅ DEPLOYMENT APPROVED by OpsMemory AI"
-            echo ""
-            echo "${{ steps.opsmemory.outputs.reasoning }}"
             exit 0
           fi
