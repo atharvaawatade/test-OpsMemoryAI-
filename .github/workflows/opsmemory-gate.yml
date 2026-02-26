@@ -1,0 +1,114 @@
+name: OpsMemory AI Deployment Gate
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+jobs:
+  # ── Step 1: Run unit tests ─────────────────────────────────────────────────
+  unit-tests:
+    name: Unit Tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Run tests
+        run: pytest tests/ -v --tb=short
+
+  # ── Step 2: OpsMemory AI safety analysis ──────────────────────────────────
+  opsmemory-gate:
+    name: OpsMemory AI Safety Gate
+    runs-on: ubuntu-latest
+    needs: unit-tests
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0   # Full history for accurate diff
+
+      - name: Extract git diff
+        id: diff
+        run: |
+          # Get diff against base branch (or last commit for push events)
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            DIFF=$(git diff origin/${{ github.base_ref }}...HEAD -- . 2>/dev/null || git diff HEAD~1 HEAD)
+          else
+            DIFF=$(git diff HEAD~1 HEAD 2>/dev/null || echo "Initial commit")
+          fi
+          # Escape for JSON
+          DIFF_ESCAPED=$(echo "$DIFF" | python3 -c "import sys,json; print(json.dumps(sys.stdin.read()))")
+          echo "diff=$DIFF_ESCAPED" >> $GITHUB_OUTPUT
+
+      - name: Analyze with OpsMemory AI
+        id: opsmemory
+        run: |
+          echo "🧠 Sending diff to OpsMemory AI for analysis..."
+
+          RESPONSE=$(curl -s -X POST \
+            "https://ops-memory-ai.vercel.app/api/demo" \
+            -H "Content-Type: application/json" \
+            -d "{
+              \"service\": \"checkout-service\",
+              \"changes\": $(git log -1 --pretty=%B | python3 -c 'import sys,json; print(json.dumps(sys.stdin.read()))'),
+              \"diff\": ${{ steps.diff.outputs.diff }}
+            }" \
+            --max-time 120)
+
+          echo "Raw response: $RESPONSE"
+
+          VERDICT=$(echo "$RESPONSE" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('verdict','UNKNOWN'))" 2>/dev/null || echo "UNKNOWN")
+          REASONING=$(echo "$RESPONSE" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('reasoning','No reasoning returned'))" 2>/dev/null || echo "Could not parse response")
+
+          echo "verdict=$VERDICT" >> $GITHUB_OUTPUT
+          echo "reasoning<<EOF" >> $GITHUB_OUTPUT
+          echo "$REASONING" >> $GITHUB_OUTPUT
+          echo "EOF" >> $GITHUB_OUTPUT
+
+          echo ""
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+          echo "  OpsMemory AI Verdict: $VERDICT"
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+          echo "$REASONING"
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+
+      - name: Gate decision
+        run: |
+          VERDICT="${{ steps.opsmemory.outputs.verdict }}"
+
+          if [ "$VERDICT" = "DENY" ]; then
+            echo ""
+            echo "⛔ DEPLOYMENT BLOCKED BY OpsMemory AI"
+            echo ""
+            echo "Reason:"
+            echo "${{ steps.opsmemory.outputs.reasoning }}"
+            echo ""
+            echo "To unblock: review the flagged signals, consult the relevant ADR,"
+            echo "and get explicit sign-off from the platform team."
+            exit 1
+
+          elif [ "$VERDICT" = "NEEDS_REVIEW" ] || [ "$VERDICT" = "NEEDS REVIEW" ]; then
+            echo ""
+            echo "⚠️  MANUAL REVIEW REQUIRED by OpsMemory AI"
+            echo ""
+            echo "${{ steps.opsmemory.outputs.reasoning }}"
+            echo ""
+            echo "This deployment requires explicit approval from a senior engineer."
+            # Don't block — but the PR will show the warning annotation
+            exit 0
+
+          else
+            echo ""
+            echo "✅ DEPLOYMENT APPROVED by OpsMemory AI"
+            echo ""
+            echo "${{ steps.opsmemory.outputs.reasoning }}"
+            exit 0
+          fi

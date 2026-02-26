@@ -1,0 +1,39 @@
+# ── Checkout Service Configuration ────────────────────────────────────────────
+# PRODUCTION — Do not modify without ADR approval
+# Last reviewed: 2025-01-15 by platform-team
+
+service:
+  name: checkout-service
+  version: "2.4.1"
+  environment: production
+
+# Network resilience
+resilience:
+  retry_count: 3                  # Max retries on transient failure
+  retry_delay_ms: 500             # Exponential backoff base
+  timeout_ms: 30000               # Request timeout (30s)
+  circuit_breaker_enabled: true   # Opens after 5 failures in 10s
+  circuit_breaker_threshold: 5
+  circuit_breaker_reset_ms: 60000
+
+# Database
+database:
+  host: "${DB_HOST}"
+  port: 5432
+  name: checkout_db
+  max_connections: 50
+  pool_size: 10
+  ssl_verify: true
+
+# Payment gateway
+payment:
+  provider: stripe
+  timeout_ms: 15000
+  verify_tls: true
+  webhook_secret: "${STRIPE_WEBHOOK_SECRET}"   # Never hardcode
+
+# Logging & observability
+observability:
+  log_level: INFO
+  trace_sample_rate: 0.1
+  metrics_enabled: true
