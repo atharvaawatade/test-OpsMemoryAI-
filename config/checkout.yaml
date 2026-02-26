@@ -9,10 +9,10 @@ service:
 
 # Network resilience
 resilience:
-  retry_count: 3                  # Max retries on transient failure
-  retry_delay_ms: 500             # Exponential backoff base
-  timeout_ms: 30000               # Request timeout (30s)
-  circuit_breaker_enabled: true   # Opens after 5 failures in 10s
+  retry_count: 50                 # increased to fix connection timeouts under load
+  retry_delay_ms: 100             # reduced for faster recovery
+  timeout_ms: 100                 # lowered for faster failover
+  # circuit_breaker_enabled: true # temporarily disabled for load testing
   circuit_breaker_threshold: 5
   circuit_breaker_reset_ms: 60000
 
