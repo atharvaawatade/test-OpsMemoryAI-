@@ -1,89 +1,34 @@
-    opsmemory-gate:
-      name: OpsMemory AI Safety Gate
-      runs-on: ubuntu-latest
-      needs: unit-tests
-      steps:
-        - uses: actions/checkout@v4
-          with:
-            fetch-depth: 0
+name: OpsMemory AI Deployment Gate
 
-        - name: Analyze diff with OpsMemory AI
-          id: opsmemory
-          run: |
-            python3 - <<'PYEOF'
-            import subprocess, re, os
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
 
-            diff = subprocess.check_output(
-                ['git', 'diff', 'origin/main...HEAD'], text=True
-            )
+jobs:
 
-            signals = []
-            for line in diff.split('\n'):
-                if not line.startswith('+') or line.startswith('+++'):
-                    continue
+  unit-tests:
+    name: Unit Tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install -r requirements.txt
+      - run: pytest tests/ -v --tb=short
 
-                m = re.search(r'retry[_\s]?count[:\s=]+(\d+)', line, re.I)
-                if m and int(m.group(1)) > 5:
-                    signals.append(('RETRY_CONFIG_CHANGE', 'HIGH',
-                        f"retry_count set to {m.group(1)} (threshold: 5)"))
-
-                if re.search(r'#\s*circuit_breaker', line, re.I) or \
-                   re.search(r'circuit_breaker\w*\s*:\s*false', line, re.I):
-                    signals.append(('CIRCUIT_BREAKER_DISABLED', 'HIGH',
-                        'Circuit breaker disabled or commented out'))
-
-                m2 = re.search(r'timeout\w*\s*[:\s=]+(\d+)', line, re.I)
-                if m2 and int(m2.group(1)) < 1000 and int(m2.group(1)) > 0:
-                    signals.append(('TIMEOUT_CHANGE', 'MEDIUM',
-                        f"timeout set to {m2.group(1)}ms — dangerously low"))
-
-                if re.search(r'\b(DROP\s+TABLE|TRUNCATE|DELETE\s+FROM|drop_all)\b',
-                             line, re.I):
-                    signals.append(('DESTRUCTIVE_DB_OP', 'HIGH',
-                        line.strip()[:100]))
-
-            if not signals:
-                verdict   = 'APPROVE'
-                reasoning = 'No dangerous signals detected. Safe to deploy.'
-            elif any(s[1] == 'HIGH' for s in signals):
-                verdict   = 'DENY'
-                reasoning = (
-                    f'OpsMemory AI detected {len(signals)} dangerous signal(s):\n\n'
-                    + '\n'.join(f'  [{s[1]}] {s[0]}: {s[2]}' for s in signals)
-                    + '\n\nCross-referenced against Elasticsearch incident memory '
-                      'and ADR index. This pattern has caused production outages. '
-                      'VERDICT: DENY — deployment blocked.'
-                )
-            else:
-                verdict   = 'NEEDS_REVIEW'
-                reasoning = 'Signals detected — manual review required.'
-
-            gho = os.environ.get('GITHUB_OUTPUT', '/dev/stdout')
-            with open(gho, 'a') as f:
-                f.write(f'verdict={verdict}\n')
-                f.write(f'reasoning<<EOF\n{reasoning}\nEOF\n')
-
-            print(f'\nVerdict: {verdict}')
-            print(f'Reasoning:\n{reasoning}')
-            PYEOF
-
-        - name: Gate decision
-          run: |
-            VERDICT="${{ steps.opsmemory.outputs.verdict }}"
-            echo ""
-            echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-            echo "  OpsMemory AI Verdict: $VERDICT"
-            echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-            echo "${{ steps.opsmemory.outputs.reasoning }}"
-            echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-
-            if [ "$VERDICT" = "DENY" ]; then
-              echo "⛔ DEPLOYMENT BLOCKED BY OpsMemory AI"
-              exit 1
-            elif [ "$VERDICT" = "NEEDS_REVIEW" ]; then
-              echo "⚠️   MANUAL REVIEW REQUIRED"
-              exit 0
-            else
-              echo "✅ DEPLOYMENT APPROVED by OpsMemory AI"
-              exit 0
-            fi
+  opsmemory-gate:
+    name: OpsMemory AI Safety Gate
+    runs-on: ubuntu-latest
+    needs: unit-tests
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Run OpsMemory signal analysis
+        run: python3 scripts/check_signals.py
