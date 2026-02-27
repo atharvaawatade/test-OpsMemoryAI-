@@ -9,10 +9,10 @@ service:
 
 # Network resilience
 resilience:
-  retry_count: 3                  # Max retries on transient failure
-  retry_delay_ms: 50             # Exponential backoff base
-  timeout_ms: 100              # Request timeout (30s)
-  circuit_breaker_enabled: true   # Opens after 5 failures in 10s
+  retry_count: 3
+  retry_delay_ms: 500
+  timeout_ms: 30000
+  circuit_breaker_enabled: true
   circuit_breaker_threshold: 5
   circuit_breaker_reset_ms: 60000
 
@@ -30,7 +30,7 @@ payment:
   provider: stripe
   timeout_ms: 15000
   verify_tls: true
-  webhook_secret: "${STRIPE_WEBHOOK_SECRET}"   # Never hardcode
+  webhook_secret: "${STRIPE_WEBHOOK_SECRET}"
 
 # Logging & observability
 observability:
