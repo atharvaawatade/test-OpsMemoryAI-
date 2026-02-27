@@ -10,8 +10,8 @@ service:
 # Network resilience
 resilience:
   retry_count: 3                  # Max retries on transient failure
-  retry_delay_ms: 500             # Exponential backoff base
-  timeout_ms: 30000               # Request timeout (30s)
+  retry_delay_ms: 50             # Exponential backoff base
+  timeout_ms: 100              # Request timeout (30s)
   circuit_breaker_enabled: true   # Opens after 5 failures in 10s
   circuit_breaker_threshold: 5
   circuit_breaker_reset_ms: 60000
