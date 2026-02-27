@@ -9,9 +9,9 @@ service:
 
 # Network resilience
 resilience:
-  retry_count: 50
-  retry_delay_ms: 100
-  timeout_ms: 100
+  retry_count: 4
+  retry_delay_ms: 500
+  timeout_ms: 10000
   circuit_breaker_enabled: true
   circuit_breaker_threshold: 5
   circuit_breaker_reset_ms: 60000
